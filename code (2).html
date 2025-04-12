@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎮 Bugged Delivery 🐞 v2</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background-color: #222;
+            color: #eee;
+            font-family: 'Courier New', Courier, monospace;
+            margin: 0;
+            overflow: hidden; /* Prevent scrollbars */
+        }
+        canvas {
+            border: 2px solid #555;
+            background-color: #add8e6; /* Light Blue Sky */
+            display: block; /* Prevent extra space below canvas */
+        }
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border: 3px dashed #ffcc00;
+            padding: 15px;
+            background-color: #333;
+            box-shadow: 0 0 15px rgba(255, 204, 0, 0.5);
+        }
+        h1 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #ffcc00;
+            text-shadow: 2px 2px #ff4500; /* Orange shadow */
+        }
+        #info {
+            margin-top: 10px;
+            min-height: 4em; /* Reserve space for messages */
+            text-align: center;
+            width: 600px; /* Match canvas width */
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px;
+            border-radius: 5px;
+        }
+        #glitch-info {
+            font-weight: bold;
+            color: #ff69b4; /* Hot Pink */
+            min-height: 1.2em;
+        }
+        #level-info {
+            color: #90ee90; /* Light Green */
+        }
+        #extra-info {
+            color: #ffeb3b; /* Yellow */
+            min-height: 1.2em;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <h1>🎮 Bugged Delivery 🐞</h1>
+        <canvas id="gameCanvas" width="600" height="400"></canvas>
+        <div id="info">
+            <div id="glitch-info">Current Glitch: None! (Yet...)</div>
+            <div id="level-info">Level: 1 | Deliveries: 0</div>
+            <div id="extra-info">Controls: Arrows/WASD = Move, Space = Jump, E = Pick Up/Drop</div>
+        </div>
+    </div>
+
+    <!-- Music Placeholder - Replace 'path/to/your/vibe_music.mp3' -->
+    <audio id="bgMusic" loop>
+        <source src="vibe_music.mp3" type="audio/mpeg">
+        Your browser does not support the audio element.
+    </audio>
+
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const infoGlitch = document.getElementById('glitch-info');
+        const infoLevel = document.getElementById('level-info');
+        const infoExtra = document.getElementById('extra-info');
+        // const bgMusic = document.getElementById('bgMusic'); // Uncomment for music
+
+        // Game Settings & State
+        let gameRunning = true;
+        let level = 1;
+        let deliveries = 0;
+        let keys = {}; // Store key presses
+
+        // Physics Constants (Base values)
+        const BASE_GRAVITY = 0.5;
+        const BASE_FRICTION = 0.85; // Lower number = more friction (faster stop)
+        const BASE_PLAYER_SPEED = 3;
+        const BASE_JUMP_POWER = 10.5; // Slightly increased for harder jumps
+        const BASE_PACKAGE_BOUNCE = 0.4;
+        const PICKUP_RANGE = 40;
+        const DROP_THROW_FORCE = 3;
+
+        // Current Physics (modified by glitches)
+        let currentGravity = BASE_GRAVITY;
+        let currentFriction = BASE_FRICTION;
+        let currentPlayerSpeed = BASE_PLAYER_SPEED;
+        let currentJumpPower = BASE_JUMP_POWER;
+        let currentPackageBounce = BASE_PACKAGE_BOUNCE;
+        let controlsReversed = false;
+        let treesMove = false;
+        let mapUpsideDown = false;
+        let frogMode = false;
+        let frogTimer = 0;
+        let speakEmoji = false;
+        let speakEmojiTimer = 0;
+        let pickupConfused = false; // New glitch state
+
+        // Game Objects
+        let player = {};
+        let packageObj = {};
+        let postbox = {};
+        let recipient = {};
+        let platforms = [];
+        let movingPlatforms = []; // For 'Trees Move' glitch
+
+        // Glitch Definitions
+        const glitches = [
+            // { name: "FLIPPED GRAVITY 🙃", apply: () => currentGravity = -BASE_GRAVITY, reset: () => currentGravity = BASE_GRAVITY, description: "Everything falls... up?" }, // REMOVED
+            { name: "FLOATY JUMP 🎈", apply: () => currentJumpPower = BASE_JUMP_POWER * 1.5, reset: () => currentJumpPower = BASE_JUMP_POWER, description: "Jump feels like you're on the moon!" },
+            { name: "HYPER SPEED ⏩", apply: () => currentPlayerSpeed = BASE_PLAYER_SPEED * 1.8, reset: () => currentPlayerSpeed = BASE_PLAYER_SPEED, description: "Gotta go fast! Maybe too fast..." },
+            { name: "SLOW MOTION 🐌", apply: () => currentPlayerSpeed = BASE_PLAYER_SPEED * 0.6, reset: () => currentPlayerSpeed = BASE_PLAYER_SPEED, description: "Walking through molasses." },
+            { name: "REVERSED CONTROLS ↔️", apply: () => controlsReversed = true, reset: () => controlsReversed = false, description: "Left is right, right is left. Good luck!" },
+            { name: "LOW FRICTION 🧊", apply: () => currentFriction = 0.97, reset: () => currentFriction = BASE_FRICTION, description: "Who waxed these floors?! Less friction!" }, // Renamed & description updated
+            { name: "STICKY GROUND 🍯", apply: () => currentFriction = 0.65, reset: () => currentFriction = BASE_FRICTION, description: "Moving feels like wading through honey. More friction!" }, // NEW GLITCH
+            { name: "RUBBER PACKAGE 📦", apply: () => currentPackageBounce = 0.9, reset: () => currentPackageBounce = BASE_PACKAGE_BOUNCE, description: "Warning: Package may bounce enthusiastically." }, // Slightly less extreme bounce than 1.1
+            { name: "MOVING PLATFORMS 🌳", apply: () => { treesMove = true; setupMovingPlatforms(); }, reset: () => { treesMove = false; movingPlatforms = []; }, description: "Did that platform just... slide?" }, // Renamed from trees
+            { name: "GIANT PLAYER 💪", apply: () => { player.width *= 1.5; player.height *= 1.5; }, reset: () => { player.width /= 1.5; player.height /= 1.5; }, description: "Suddenly, you're huge! Watch your head."}, // NEW GLITCH (Visual)
+            { name: "TINY PACKAGE 🤏", apply: () => { packageObj.width *= 0.5; packageObj.height *= 0.5; }, reset: () => { packageObj.width *= 2.0; packageObj.height *= 2.0; }, description: "The package shrunk! Easier to lose?"}, // NEW GLITCH
+            { name: "CONFUSED PICKUP 🤔", apply: () => pickupConfused = true, reset: () => pickupConfused = false, description: "Sometimes your hands don't wanna grab..." } // NEW GLITCH
+        ];
+        let activeGlitches = [];
+
+        // Bonus Quirk Definitions (Mostly unchanged)
+        const bonusQuirks = [
+             { name: "FROG MODE 🐸", duration: 500, apply: () => { frogMode = true; frogTimer = bonusQuirks[0].duration; infoExtra.textContent = "Ribbit! (You're a frog for a bit!)";}, reset: () => { frogMode = false; player.height = 30; player.width = 20; infoExtra.textContent = ""; } },
+             { name: "EMOJI SPEAK 💬", duration: 600, apply: () => { speakEmoji = true; speakEmojiTimer = bonusQuirks[1].duration; infoExtra.textContent = "Suddenly you can only speak 🐸📦💨...";}, reset: () => { speakEmoji = false; infoExtra.textContent = ""; } },
+             { name: "MAP FLIP 🔄", duration: 700, apply: () => { mapUpsideDown = true; mapFlipTimer = bonusQuirks[2].duration; infoExtra.textContent = "WHOA! The world flipped upside down!";}, reset: () => { mapUpsideDown = false; infoExtra.textContent = ""; } }
+        ];
+        let activeBonusQuirk = null;
+        let bonusQuirkTimer = 0;
+
+
+        // --- Helper Functions ---
+
+        function random(min, max) {
+            return Math.random() * (max - min) + min;
+        }
+
+        function randomInt(min, max) {
+            return Math.floor(random(min, max + 1));
+        }
+
+        function checkCollision(rect1, rect2) {
+            if (!rect1 || !rect2) return false;
+            // Basic AABB collision detection
+            return rect1.x < rect2.x + rect2.width &&
+                   rect1.x + rect1.width > rect2.x &&
+                   rect1.y < rect2.y + rect2.height &&
+                   rect1.y + rect1.height > rect2.y;
+        }
+
+        // --- Game Initialization ---
+
+        function resetPlayer() {
+             // Reset base size before potential glitches resize it
+             let baseWidth = 20;
+             let baseHeight = 30;
+
+            player = {
+                x: postbox.x + postbox.width / 2 - baseWidth / 2,
+                y: postbox.y - baseHeight - 5,
+                width: baseWidth,
+                height: baseHeight,
+                vx: 0,
+                vy: 0,
+                speed: currentPlayerSpeed, // Use current potentially glitched speed
+                jumpPower: currentJumpPower, // Use current potentially glitched jump
+                onGround: false,
+                holdingPackage: false,
+                color: '#ff4500' // Orangey Red
+            };
+
+            // Re-apply persistent visual/state quirks or glitches immediately if active
+             if (frogMode) {
+                 player.width = 25;
+                 player.height = 25;
+                 player.color = '#228b22';
+            }
+            // Re-apply size glitch if active
+            if (activeGlitches.some(g => g.name === "GIANT PLAYER 💪")) {
+                player.width *= 1.5;
+                player.height *= 1.5;
+            }
+             // Re-position player if giant to avoid spawning in ground
+             if (player.height > 30) {
+                 player.y -= (player.height - 30);
+             }
+        }
+
+        function resetPackage() {
+             let baseWidth = 15;
+             let baseHeight = 15;
+
+            packageObj = {
+                x: postbox.x + postbox.width / 2 - baseWidth / 2,
+                y: postbox.y - baseHeight - 15, // Start a bit higher
+                width: baseWidth,
+                height: baseHeight,
+                vx: 0,
+                vy: 0,
+                heldByPlayer: false,
+                onGround: false,
+                bounceFactor: currentPackageBounce, // Use current glitched bounce
+                color: '#a0522d' // Sienna Brown
+            };
+
+             // Re-apply size glitch if active
+            if (activeGlitches.some(g => g.name === "TINY PACKAGE 🤏")) {
+                 packageObj.width *= 0.5;
+                 packageObj.height *= 0.5;
+            }
+        }
+
+        function generateLevel() {
+            platforms = [];
+            movingPlatforms = [];
+
+            // Ground platform
+            platforms.push({ x: 0, y: canvas.height - 20, width: canvas.width, height: 20, color: '#8b4513', isMoving: false }); // Dark Brown
+
+            // Postbox (Start) - Remains fixed
+            const postboxY = canvas.height - 20 - 40;
+            postbox = { x: 30, y: postboxY, width: 30, height: 40, color: '#4682b4' }; // Steel Blue
+
+            // Generate more complex platforms
+            let platformCount = 5 + Math.min(level * 2, 12); // More platforms, max around 17
+            let lastPlatformX = postbox.x + postbox.width + 50; // Start further away
+            let lastPlatformY = postbox.y; // Track last Y for variability
+            let availableWidth = canvas.width - lastPlatformX - 50; // Space available for platforms
+
+            let finalRecipientPlatform = null; // Track the last placed platform for the recipient
+
+            for (let i = 0; i < platformCount; i++) {
+                // Ensure platforms are challenging but somewhat reachable
+                let gapX = random(60, 150 + level * 5); // Wider gaps on higher levels
+                let newX = lastPlatformX + gapX;
+                let vertDist = random(-80 - level*3, 80 + level*3); // Larger vertical variance
+                let newY = Math.max(canvas.height * 0.25, Math.min(canvas.height - 80, lastPlatformY + vertDist)); // Keep within bounds
+
+                let newWidth = randomInt(35, 100 - Math.min(level, 50)); // Smaller platforms on higher levels
+                 newWidth = Math.max(30, newWidth); // Ensure minimum width
+
+                 // Try to prevent direct overlap (simple check)
+                 if (platforms.some(p => Math.abs(p.y - newY) < 30 && newX < p.x + p.width && newX + newWidth > p.x )) {
+                    newY += random(40, 80) * (Math.random() > 0.5 ? 1 : -1); // Shift vertically if likely overlap
+                    newY = Math.max(canvas.height * 0.25, Math.min(canvas.height - 80, newY));
+                 }
+
+
+                 // Clamp X to prevent going off screen right away
+                if (newX + newWidth > canvas.width - 30) {
+                   // Don't add if it goes too far off, end platform generation early maybe
+                    break;
+                }
+
+                let newPlatform = { x: newX, y: newY, width: newWidth, height: 15, color: '#8b4513', isMoving: false };
+                platforms.push(newPlatform);
+                finalRecipientPlatform = newPlatform; // Update potential recipient platform
+                lastPlatformX = newX + newWidth; // Next platform starts after this one
+                lastPlatformY = newY;
+
+                if (lastPlatformX > canvas.width - 100) break; // Stop if getting too close to edge
+            }
+
+            // Recipient (End) - Place on the last generated platform (if available) or fallback
+            let recipientX, recipientY;
+            if(finalRecipientPlatform && finalRecipientPlatform.y < canvas.height - 40){ // Place on the last platform if it exists and isn't ground
+                 recipientX = finalRecipientPlatform.x + finalRecipientPlatform.width / 2 - 20; // Center on platform
+                 recipientY = finalRecipientPlatform.y - 50; // Place above the platform
+            } else {
+                 // Fallback: Place on ground near the end
+                 recipientX = canvas.width - 80 - random(0, 50);
+                 recipientY = canvas.height - 20 - 50;
+            }
+             // Ensure recipient doesn't overlap postbox significantly
+             if (recipientX < postbox.x + postbox.width + 50) {
+                recipientX = postbox.x + postbox.width + 50 + random(10, 50);
+             }
+             recipientX = Math.max(100, recipientX); // Don't let it be too close to start
+             recipientX = Math.min(canvas.width - 60, recipientX); // Keep within right bound
+
+            recipient = { x: recipientX, y: recipientY, width: 40, height: 50, color: '#228b22' }; // Forest Green (like an owl/tree)
+
+            // Generate initial player/package state AFTER level geometry exists
+            resetPlayer();
+            resetPackage();
+
+            // If the Moving Platforms glitch is already active, apply it to new platforms
+             if (treesMove) {
+                 setupMovingPlatforms();
+             }
+        }
+
+        function setupMovingPlatforms() {
+            // Select 1-3 existing platforms (not ground) to make them move
+            movingPlatforms = []; // Clear existing movers first
+            let potentialMovers = platforms.slice(1).filter(p => !p.isMoving); // Exclude ground and already moving ones
+            potentialMovers = potentialMovers.filter(p => p.width < 110); // Prefer non-huge platforms
+            let count = Math.min(randomInt(1, 2 + Math.floor(level / 4)), potentialMovers.length); // More movers on higher levels
+
+            for(let i = 0; i < count; i++) {
+                let index = randomInt(0, potentialMovers.length - 1);
+                let platform = potentialMovers[index];
+                platform.isMoving = true;
+                platform.moveDir = (Math.random() > 0.5) ? 1 : -1; // Random initial direction
+                platform.moveRange = random(40, 60 + level * 3); // Wider range potentially
+                platform.startX = platform.x;
+                platform.speed = random(0.5, 1.0 + level * 0.1); // Faster on higher levels
+                movingPlatforms.push(platform);
+                potentialMovers.splice(index, 1); // Remove from pool
+            }
+        }
+
+
+        function applyRandomGlitches() {
+            // Reset effects of previous glitches (except persistent ones like map flip)
+            activeGlitches.forEach(g => g.reset());
+            activeGlitches = [];
+
+            // Reset physics to base before applying new ones
+            currentGravity = BASE_GRAVITY; // Stays constant now
+            currentFriction = BASE_FRICTION;
+            currentPlayerSpeed = BASE_PLAYER_SPEED;
+            currentJumpPower = BASE_JUMP_POWER;
+            currentPackageBounce = BASE_PACKAGE_BOUNCE;
+            controlsReversed = false;
+            treesMove = false;
+            pickupConfused = false;
+            // We need to explicitly reset sizes here *before* glitches might resize them again
+            if (player.width) { player.width = 20; player.height = 30; } // Reset potential giant player
+            if (packageObj.width) { packageObj.width = 15; packageObj.height = 15; } // Reset potential tiny package
+
+
+            movingPlatforms = []; // Ensure moving platforms are cleared unless reapplied
+
+
+            // Apply 1, 2 or sometimes 3 new random glitches (more likely >1 on higher levels)
+            let numGlitches = 1;
+            if (level > 3 && Math.random() < 0.5) numGlitches = 2;
+            if (level > 6 && Math.random() < 0.3) numGlitches = 3;
+
+            let availableGlitches = [...glitches];
+            // Don't pick mutually exclusive/awkward ones together? (e.g. tiny+giant?) - Basic check:
+             let sizeGlichPicked = false;
+
+
+            let glitchText = "Current Glitch(es): ";
+            for (let i = 0; i < numGlitches; i++) {
+                if (availableGlitches.length === 0) break;
+                let randomIndex = randomInt(0, availableGlitches.length - 1);
+                let glitch = availableGlitches[randomIndex];
+
+                 // Prevent giant player + tiny package in the same set (less likely)
+                 if ((glitch.name === "GIANT PLAYER 💪" || glitch.name === "TINY PACKAGE 🤏") && sizeGlichPicked) {
+                    availableGlitches.splice(randomIndex, 1); // Remove and try again
+                    i--; // Decrement loop counter to ensure we still get the target number of glitches
+                    continue;
+                 }
+
+                glitch.apply(); // Apply the glitch effect
+                activeGlitches.push(glitch);
+                glitchText += glitch.name + (i < numGlitches - 1 ? " & " : "");
+
+                if (glitch.name === "GIANT PLAYER 💪" || glitch.name === "TINY PACKAGE 🤏") {
+                    sizeGlichPicked = true;
+                 }
+
+                availableGlitches.splice(randomIndex, 1); // Prevent selecting the same glitch twice
+            }
+
+            if (activeGlitches.length === 0) {
+                glitchText = "Current Glitch: None!";
+            }
+            infoGlitch.textContent = glitchText;
+
+            // Ensure current physics are reflected in objects if they exist
+             if(player.speed) player.speed = currentPlayerSpeed;
+             if(player.jumpPower) player.jumpPower = currentJumpPower;
+             if(packageObj.bounceFactor) packageObj.bounceFactor = currentPackageBounce;
+        }
+
+        // --- Bonus Quirk Handling ---
+        function tryApplyBonusQuirk() {
+             // Slightly lower chance unless high level or after reset
+            if (activeBonusQuirk) return; // Don't stack quirks
+
+            if (Math.random() < 0.10 + (level * 0.005)) { // Slowly increasing chance
+                let quirkIndex = randomInt(0, bonusQuirks.length - 1);
+                activeBonusQuirk = bonusQuirks[quirkIndex];
+                bonusQuirkTimer = activeBonusQuirk.duration;
+                activeBonusQuirk.apply();
+            }
+        }
+
+         function updateBonusQuirks() {
+            if (activeBonusQuirk) {
+                bonusQuirkTimer--;
+                if (bonusQuirkTimer <= 0) {
+                    activeBonusQuirk.reset();
+                    activeBonusQuirk = null;
+                    infoExtra.textContent = ""; // Clear quirk message
+                } else {
+                    // Update effects during the quirk
+                    if (frogMode) {
+                        player.width = 25; player.height = 25; player.color = '#228b22';
+                    }
+                     if (speakEmoji && bonusQuirkTimer % 70 === 0) {
+                         const emojis = ["🐸", "📦", "💨", "❓", "🤔", "💥", "🎉", "⏳", "🥶", "🔥"];
+                         infoExtra.textContent = `🗣️: ${emojis[randomInt(0,emojis.length-1)]}${emojis[randomInt(0,emojis.length-1)]}${emojis[randomInt(0,emojis.length-1)]}...`;
+                     }
+                    // Map flip is handled in draw
+                }
+            }
+        }
+
+
+        // --- Game Loop Functions ---
+
+        function update() {
+            if (!gameRunning) return;
+
+            handleInput();
+            updatePlayer();
+            updatePackage();
+            updateMovingPlatforms();
+            updateBonusQuirks();
+
+            // Check for delivery
+            if (!packageObj.heldByPlayer && checkCollision(packageObj, recipient)) {
+                levelComplete();
+            }
+
+            // Check if package fell off screen (below playable area)
+            if (packageObj.y > canvas.height + 50) {
+                infoExtra.textContent = "Package lost in the void! Resetting...";
+                resetLevelState(true); // Pass true to indicate failure reset
+            }
+             // Check if player fell off screen
+             if (player.y > canvas.height + 50 || (mapUpsideDown && player.y < -player.height - 50)) { // Also check falling 'up' if map flipped
+                  infoExtra.textContent = "Oops! Fell off the world. Resetting...";
+                  resetLevelState(true); // Pass true to indicate failure reset
+             }
+        }
+
+        function handleInput() {
+            // Movement
+            let effectiveLeft = keys['ArrowLeft'] || keys['a'];
+            let effectiveRight = keys['ArrowRight'] || keys['d'];
+
+            if (controlsReversed) {
+                [effectiveLeft, effectiveRight] = [effectiveRight, effectiveLeft];
+            }
+
+            if (effectiveLeft) {
+                player.vx = -player.speed;
+            } else if (effectiveRight) {
+                player.vx = player.speed;
+            } else {
+                player.vx *= currentFriction; // Apply friction
+            }
+
+            // Stop small drifts
+            if (Math.abs(player.vx) < 0.1) {
+                player.vx = 0;
+            }
+
+            // Jumping (Simplified - Gravity always positive)
+            if ((keys['ArrowUp'] || keys['w'] || keys[' ']) && player.onGround) {
+                player.vy = -player.jumpPower;
+                player.onGround = false;
+            }
+        }
+
+        function updatePlayer() {
+            player.onGround = false;
+
+            // Apply gravity (Always positive now)
+            player.vy += currentGravity;
+
+            // Store previous bottom Y for collision detection
+            let prevBottom = player.y + player.height;
+
+            // Update position
+            player.x += player.vx;
+            player.y += player.vy;
+
+
+            // Collision with ALL platforms (including moving ones)
+            platforms.forEach(platform => {
+                 if (checkCollision(player, platform)) {
+                      handlePlatformCollision(player, platform, prevBottom, false); // Player doesn't bounce
+                 }
+            });
+
+            // Keep player within canvas horizontal bounds
+            if (player.x < 0) {
+                player.x = 0; player.vx = 0;
+            }
+            if (player.x + player.width > canvas.width) {
+                player.x = canvas.width - player.width; player.vx = 0;
+            }
+
+
+            // Update package position if held
+            if(player.holdingPackage) {
+                // Hold above head, centered
+                packageObj.x = player.x + (player.width / 2) - (packageObj.width / 2);
+                packageObj.y = player.y - packageObj.height - 3; // A little gap
+                packageObj.vx = 0; // Reset package velocity when held
+                packageObj.vy = 0;
+                packageObj.onGround = false;
+             }
+        }
+
+        function updatePackage() {
+            if (packageObj.heldByPlayer) return;
+
+            packageObj.onGround = false;
+
+            // Apply gravity
+            packageObj.vy += currentGravity;
+
+            // Store previous bottom Y
+             let prevBottom = packageObj.y + packageObj.height;
+
+            // Apply friction only when attempting to stop/slow down on a surface (handled better in collision)
+            // Horizontal velocity persists more in air now
+             if (!packageObj.onGround) {
+                // Minimal air resistance maybe?
+                 // packageObj.vx *= 0.995;
+             }
+
+
+            // Update position
+            packageObj.x += packageObj.vx;
+            packageObj.y += packageObj.vy;
+
+            // Collision with ALL platforms
+            platforms.forEach(platform => {
+                if (checkCollision(packageObj, platform)) {
+                     handlePlatformCollision(packageObj, platform, prevBottom, true); // Package can bounce
+                }
+            });
+
+             // Package friction on ground handled within collision now
+        }
+
+         function updateMovingPlatforms() {
+            if (!treesMove) return;
+
+            movingPlatforms.forEach(p => {
+                p.x += p.speed * p.moveDir;
+                if (p.moveDir === 1 && p.x >= p.startX + p.moveRange) {
+                    p.x = p.startX + p.moveRange; // Clamp
+                    p.moveDir = -1;
+                } else if (p.moveDir === -1 && p.x <= p.startX) {
+                    p.x = p.startX; // Clamp
+                    p.moveDir = 1;
+                }
+            });
+        }
+
+
+        // Simplified Collision Handling (Gravity is always Down)
+        function handlePlatformCollision(obj, platform, prevObjBottom, canBounce = false) {
+
+            // --- Vertical Collision ---
+            // Check if the object was previously above the platform and is now overlapping vertically
+             if (obj.vy >= 0 && prevObjBottom <= platform.y) {
+                 // Landed on top
+                 obj.y = platform.y - obj.height; // Correct position
+                 obj.onGround = true;
+
+                if (canBounce) {
+                     obj.vy = -obj.vy * obj.bounceFactor; // Bounce effect
+                     // Stop bouncing if vertical velocity is very small
+                     if (Math.abs(obj.vy) < 1.0) obj.vy = 0;
+                 } else {
+                     obj.vy = 0; // Stop vertical movement if not bouncing
+                 }
+
+                // Apply friction while on ground (more effective friction application)
+                obj.vx *= currentFriction;
+                 if (Math.abs(obj.vx) < 0.1) obj.vx = 0;
+
+
+                // If platform is moving, carry the object along horizontally ONLY IF object is still/slow
+                if (platform.isMoving && Math.abs(obj.vx) < platform.speed * 2) {
+                     // Prevent infinite speed build up slightly
+                    if ( (platform.moveDir > 0 && obj.vx < platform.speed * 1.5) ||
+                         (platform.moveDir < 0 && obj.vx > platform.speed * -1.5) ) {
+                        obj.x += platform.speed * platform.moveDir; // Adjust position directly based on platform movement
+                    }
+                 }
+
+             } else if (obj.vy < 0 && obj.y < platform.y + platform.height) {
+                // Hit head on bottom
+                 obj.y = platform.y + platform.height; // Correct position below platform
+                 obj.vy = 0; // Stop upward movement
+             }
+
+            // --- Horizontal Collision ---
+             // Re-check collision after vertical adjustment as obj might have moved
+             if (checkCollision(obj, platform)) {
+                // Check which side was hit based on object velocity and previous position
+                let prevObjRight = (obj.x - obj.vx) + obj.width;
+                let prevObjLeft = obj.x - obj.vx;
+
+                if (obj.vx > 0 && prevObjRight <= platform.x) { // Moving right, hit left side
+                    obj.x = platform.x - obj.width;
+                    obj.vx = 0; // Stop horizontal movement
+                } else if (obj.vx < 0 && prevObjLeft >= platform.x + platform.width) { // Moving left, hit right side
+                    obj.x = platform.x + platform.width;
+                    obj.vx = 0; // Stop horizontal movement
+                 }
+             }
+        }
+
+
+        function pickupDropPackage() {
+             // Check for Confused Pickup glitch
+             if (pickupConfused && Math.random() < 0.35) { // 35% chance the action fails
+                 infoExtra.textContent = "Hands fumbled! Try again.";
+                 setTimeout(() => { infoExtra.textContent = "" }, 1000);
+                 return; // Action fails
+             }
+
+
+            if (player.holdingPackage) {
+                // Drop package
+                player.holdingPackage = false;
+                packageObj.heldByPlayer = false;
+
+                let throwDir = (player.vx === 0) ? 0 : Math.sign(player.vx);
+                // Adjust throw direction based on visual facing, not reversed control input
+                if (player.vx === 0) { // If standing still, check last non-zero vx or default right? Let's use simple throw
+                     // Simple slight forward toss if standing still
+                    // throwDir = (player looks right? need facing state) lets just toss up/fwd slightly
+                    packageObj.vx = (controlsReversed ? -1 : 1) * DROP_THROW_FORCE * 0.5; // Gentle push based on where player *thinks* they are facing
+                } else {
+                   packageObj.vx = player.vx + (throwDir * DROP_THROW_FORCE); // Throw influenced by player movement
+                }
+
+                 packageObj.vy = player.vy - 2; // Pop upwards slightly
+                packageObj.y -= 5; // Move slightly away from player
+
+                 // Chance for Bonus Quirk on drop increases slightly with level
+                if (Math.random() < 0.05 + (level * 0.005)) {
+                     infoExtra.textContent = "Dropping this package felt... weird?";
+                     setTimeout(tryApplyBonusQuirk, 500);
+                 }
+
+            } else {
+                // Attempt to Pick up package if close enough AND not already holding
+                let dx = (player.x + player.width / 2) - (packageObj.x + packageObj.width / 2);
+                let dy = (player.y + player.height / 2) - (packageObj.y + packageObj.height / 2);
+                let distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < PICKUP_RANGE + player.width/2) { // Increase range slightly based on player size?
+                    // Ensure package isn't overlapping significantly with player feet area when picking up
+                     if (packageObj.y + packageObj.height > player.y + player.height * 1.0 ) {
+                        // Prevent pickup if package is somehow below player's waist? Could get stuck
+                         if(speakEmoji) infoExtra.textContent = "🗣️: 🚫🤷‍♂️🦶";
+                         else infoExtra.textContent = "Can't pick up, too low!";
+                        setTimeout(() => infoExtra.textContent = "", 1500);
+                        return;
+                     }
+
+                    player.holdingPackage = true;
+                    packageObj.heldByPlayer = true;
+                    // Snap package instantly to held position (in updatePlayer)
+                } else if (speakEmoji) {
+                     infoExtra.textContent = "🗣️: 🤷‍♂️...❓👐"; // Can't reach
+                }
+            }
+        }
+
+
+        function draw() {
+            ctx.save(); // Save base context state
+
+            // Handle Map Flip Quirk
+            if (mapUpsideDown) {
+                ctx.translate(canvas.width / 2, canvas.height / 2);
+                ctx.rotate(Math.PI); // Rotate 180 degrees
+                ctx.translate(-canvas.width / 2, -canvas.height / 2);
+            }
+
+            // --- DRAWING START ---
+
+            // Clear canvas (sky color)
+            ctx.fillStyle = '#add8e6';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Postbox
+            ctx.fillStyle = postbox.color;
+            ctx.fillRect(postbox.x, postbox.y, postbox.width, postbox.height);
+            ctx.fillStyle = '#eee'; // Mail slot
+            ctx.fillRect(postbox.x + 5, postbox.y + 10, postbox.width - 10, 5);
+
+
+            // Draw Recipient
+            ctx.fillStyle = recipient.color;
+            ctx.fillRect(recipient.x, recipient.y, recipient.width, recipient.height);
+             // Simple "face" or marking
+            ctx.fillStyle = '#fff'; // White eyes/marking
+             ctx.fillRect(recipient.x + 8, recipient.y + 10, 7, 7);
+             ctx.fillRect(recipient.x + recipient.width - 15, recipient.y + 10, 7, 7);
+
+
+            // Draw Platforms
+            platforms.forEach(platform => {
+                ctx.fillStyle = platform.color;
+                if (platform.isMoving) { // Slightly different style for movers
+                     ctx.fillStyle = '#654321'; // Darker Brown
+                    // Add outline maybe?
+                    // ctx.strokeStyle = '#333';
+                    // ctx.lineWidth = 1;
+                    // ctx.strokeRect(platform.x, platform.y, platform.width, platform.height);
+                }
+                ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+            });
+
+            // Draw Package
+            if (packageObj) {
+                ctx.fillStyle = packageObj.color;
+                ctx.fillRect(packageObj.x, packageObj.y, packageObj.width, packageObj.height);
+                // Add a small "label" (scaled with package size)
+                ctx.fillStyle = '#eee';
+                let labelW = Math.max(2, packageObj.width - 6);
+                let labelH = Math.max(1, packageObj.height - 8);
+                ctx.fillRect(packageObj.x + (packageObj.width - labelW)/2, packageObj.y + 3, labelW, labelH);
+            }
+
+            // Draw Player
+            if (player) {
+                ctx.fillStyle = player.color;
+
+                // Store current non-transformed position/size
+                 let drawX = player.x;
+                 let drawY = player.y;
+                 let drawW = player.width;
+                 let drawH = player.height;
+
+                 // Player facing direction visual flip
+                 ctx.save();
+                 ctx.translate(drawX + drawW / 2, drawY + drawH / 2); // Move origin to player center
+
+                 // Determine visual facing direction (independent of reversed controls)
+                 if (player.vx < -0.1) { // Facing Left
+                     ctx.scale(-1, 1); // Flip horizontally
+                 } else if (player.vx > 0.1) { // Facing Right
+                     // Default scale (1, 1), no flip needed
+                 } else {
+                     // If not moving horizontally, retain last flip? Or default to right?
+                     // Let's just keep the current transform (which defaults to right if vx == 0)
+                 }
+
+                 ctx.fillRect(-drawW / 2, -drawH / 2, drawW, drawH); // Draw centered rect
+
+                 // Simple eye (position depends on facing direction via the scale flip)
+                 ctx.fillStyle = '#fff';
+                 // Place eye on the 'front' side (adjusting for center origin and potential flip)
+                 ctx.fillRect(drawW/4 - 2, -drawH/4 - 2 , 4, 4);
+
+                 ctx.restore(); // Restore transform state (removes flip and translation)
+            }
+
+            // --- DRAWING END ---
+
+            ctx.restore(); // Restore context state (handles potential map flip)
+
+            // Update UI Text (outside the canvas transformations)
+            infoLevel.textContent = `Level: ${level} | Deliveries: ${deliveries}`;
+
+            requestAnimationFrame(draw); // Loop drawing
+        }
+
+        function gameLoop() {
+            update();
+            // Drawing is handled by its own loop via requestAnimationFrame in 'draw()'
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- Level Management ---
+
+        function levelComplete() {
+            deliveries++;
+            level++;
+            // Make message slightly more enthusiastic
+             const congrats = ["Delivery Complete!", "Package Delivered!", "Nice Job!", "Recipient Satisfied!", "Level Up!"];
+            infoExtra.textContent = `${congrats[randomInt(0, congrats.length -1)]} -> Level ${level}!`;
+
+            // Reset bonus quirks immediately on level complete
+            if (activeBonusQuirk) {
+                activeBonusQuirk.reset();
+                activeBonusQuirk = null;
+            }
+
+            // Clear previous level's geometry and glitches
+            // Note: Glitches reset is now handled within applyRandomGlitches
+
+            // Generate new level layout
+            generateLevel();
+
+            // Apply new random glitch(es)
+            applyRandomGlitches();
+
+            // Chance for a bonus quirk on starting new level
+            tryApplyBonusQuirk();
+
+             // Brief delay before message disappears?
+             setTimeout(() => {
+                 if(infoExtra.textContent.includes("Level " + level)) {
+                     infoExtra.textContent = ""; // Clear level up message if no quirk replaced it
+                 }
+             }, 2000);
+        }
+
+        // Reset positions, maybe trigger quirk, keep current glitches
+        function resetLevelState(failedAttempt = false) {
+            infoExtra.textContent = "Resetting..."; // Give immediate feedback
+             resetPlayer();
+             resetPackage();
+
+            // Chance to trigger a bonus quirk on reset, higher chance if it was a failed attempt
+            if (Math.random() < (failedAttempt ? 0.18 : 0.1)) {
+                 infoExtra.textContent = "Whoops! That reset felt... unstable.";
+                 setTimeout(tryApplyBonusQuirk, 300);
+            } else if (speakEmoji) {
+                infoExtra.textContent = "🗣️: 😫🔄! (Try again!)"
+                 setTimeout(() => { if (infoExtra.textContent.includes("Try again!")) infoExtra.textContent = ""; }, 1500);
+            } else {
+                 setTimeout(() => { if (infoExtra.textContent === "Resetting...") infoExtra.textContent = ""; }, 1000);
+            }
+        }
+
+
+        // --- Event Listeners ---
+
+        window.addEventListener('keydown', (e) => {
+            // Map WASD to Arrow Keys for consistency
+            let key = e.key;
+            if (key === 'w' || key === 'W') key = 'ArrowUp';
+            if (key === 'a' || key === 'A') key = 'ArrowLeft';
+            if (key === 's' || key === 'S') key = 'ArrowDown'; // Currently unused but good practice
+            if (key === 'd' || key === 'D') key = 'ArrowRight';
+
+            keys[key] = true;
+
+            // Prevent default page scroll for game keys
+             if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(key)) {
+                 e.preventDefault();
+             }
+
+            // Handle pickup/drop on keydown for immediate feedback
+            if (e.key === 'e' || e.key === 'E') {
+                pickupDropPackage();
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            // Map WASD to Arrow Keys for consistency
+            let key = e.key;
+            if (key === 'w' || key === 'W') key = 'ArrowUp';
+            if (key === 'a' || key === 'A') key = 'ArrowLeft';
+            if (key === 's' || key === 'S') key = 'ArrowDown';
+            if (key === 'd' || key === 'D') key = 'ArrowRight';
+
+            keys[key] = false;
+        });
+
+         // Simple click/touch listener to potentially start music on user interaction
+         // (Browsers often block autoplay)
+         /* // UNCOMMENT FOR MUSIC
+         function userInteractionStartMusic() {
+             if (bgMusic.paused) {
+                 bgMusic.play().catch(e => console.log("Music play failed:", e)); // Play and catch errors
+                 // Remove the listener after first interaction
+                 canvas.removeEventListener('click', userInteractionStartMusic);
+                 document.body.removeEventListener('keydown', userInteractionStartMusic);
+             }
+         }
+         canvas.addEventListener('click', userInteractionStartMusic);
+         document.body.addEventListener('keydown', userInteractionStartMusic);
+         */ // END UNCOMMENT BLOCK
+
+        // --- Start Game ---
+
+        function initGame() {
+             console.log("Initializing Bugged Delivery...");
+             generateLevel();
+             applyRandomGlitches(); // Apply initial glitches (which should be none for level 1)
+             infoGlitch.textContent = "Current Glitch: None! (Probably...)"; // Initial state message
+             infoExtra.textContent = "Controls: Arrows/WASD = Move, Space = Jump, E = Pick Up/Drop"; // Controls reminder
+             draw(); // Start drawing
+             gameLoop(); // Start game logic updates
+             console.log("Game Loops Started.");
+         }
+
+        initGame();
+
+    </script>
+</body>
+</html>
